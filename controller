@@ -1,0 +1,185 @@
+`timescale 1ns / 1ps
+
+
+module controller (
+    input        clk,
+    input        rst_n,
+    input        rx,
+    input        init,
+    output       tx,
+    output [7:0] cipher_out,
+    output       busy
+);
+
+    localparam [2:0] IDLE     = 3'd0,
+                     RECV_KIV = 3'd1,
+                     TRIG     = 3'd2,
+                     WARMUP   = 3'd3,
+                     RECV_PT  = 3'd4,
+                     ENCRYPT  = 3'd5,
+                     SEND_CT  = 3'd6,
+                     WAIT_TX  = 3'd7;
+
+    reg [2:0]  ps, ns;
+    reg [79:0] key_reg, iv_reg;
+    reg [4:0]  byte_cnt;
+    reg [3:0]  bit_cnt;
+    reg [7:0]  pt_shift;
+    reg [7:0]  ct_shift;
+    reg [7:0]  tx_data_r;
+    reg        tx_init_r;
+    reg        trivium_init_r;
+    reg        plain_bit;
+    reg        trivium_en;
+
+    wire [7:0] rx_data;
+    wire       rx_valid, tx_busy, frm_err;
+    wire       trivium_valid, cipher_bit;
+
+    uart_top u_uart (
+        .clk       (clk),
+        .rst_n     (rst_n),
+        .rx        (rx),
+        .baud_rate (3'b100),
+        .tx_data   (tx_data_r),
+        .tx_init   (tx_init_r),
+        .tx        (tx),
+        .rx_data   (rx_data),
+        .rx_valid  (rx_valid),
+        .tx_busy   (tx_busy),
+        .frm_err   (frm_err)
+    );
+
+    trivium_integrated u_trivium (
+        .clk        (clk),
+        .rst_n      (rst_n),
+        .key_in     (key_reg),
+        .iv_in      (iv_reg),
+        .init       (trivium_init_r),
+        .done       (1'b0),
+        .en         (trivium_en),
+        .plain_txt  (plain_bit),
+        .cipher_text(cipher_bit),
+        .key        (),
+        .valid      (trivium_valid),
+        .iv_out     ()
+    );
+
+    assign busy       = (ps != IDLE);
+    assign cipher_out = ct_shift;
+
+    //------------------------------------------------
+    // State Register
+    //------------------------------------------------
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) ps <= IDLE;
+        else        ps <= ns;
+    end
+
+    //------------------------------------------------
+    // Next State Logic
+    //------------------------------------------------
+    always @(*) begin
+        ns = ps;
+        case (ps)
+            IDLE:     ns = init                              ? RECV_KIV : IDLE;
+            RECV_KIV: ns = (rx_valid && byte_cnt == 5'd19)   ? TRIG     : RECV_KIV;
+            TRIG:     ns = WARMUP;
+            WARMUP:   ns = trivium_valid                     ? RECV_PT  : WARMUP;
+            RECV_PT:  ns = rx_valid                          ? ENCRYPT  : RECV_PT;
+            ENCRYPT:  ns = (bit_cnt == 4'd9)                 ? SEND_CT  : ENCRYPT;
+            SEND_CT:  ns = WAIT_TX;
+            WAIT_TX:  ns = (!tx_busy && !tx_init_r)          ? RECV_PT  : WAIT_TX;
+            default:  ns = IDLE;
+        endcase
+    end
+
+    //------------------------------------------------
+    // Datapath
+    //------------------------------------------------
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            key_reg        <= 80'd0;
+            iv_reg         <= 80'd0;
+            byte_cnt       <= 5'd0;
+            bit_cnt        <= 4'd0;
+            pt_shift       <= 8'd0;
+            ct_shift       <= 8'd0;
+            tx_data_r      <= 8'd0;
+            tx_init_r      <= 1'b0;
+            trivium_init_r <= 1'b0;
+            plain_bit      <= 1'b0;
+            trivium_en     <= 1'b0;
+        end
+        else begin
+            tx_init_r      <= 1'b0;
+            trivium_init_r <= 1'b0;
+            trivium_en     <= 1'b0;
+
+            case (ps)
+                IDLE: begin
+                    byte_cnt  <= 5'd0;
+                    bit_cnt   <= 4'd0;
+                    plain_bit <= 1'b0;
+                end
+
+                RECV_KIV: begin
+                    if (rx_valid) begin
+                        if (byte_cnt < 5'd10)
+                            key_reg <= {rx_data, key_reg[79:8]};
+                        else
+                            iv_reg  <= {rx_data, iv_reg[79:8]};
+                        byte_cnt <= byte_cnt + 1'b1;
+                    end
+                end
+
+                TRIG: begin
+                    trivium_init_r <= 1'b1;
+                end
+
+                WARMUP: begin
+                end
+
+                RECV_PT: begin
+                    bit_cnt   <= 4'd0;
+                    plain_bit <= 1'b0;
+                    if (rx_valid)
+                        pt_shift <= rx_data;
+                end
+
+                ENCRYPT: begin
+                    // --- Enable: set at bit_cnt 0-7 → effective 1-8 = 8 shifts ---
+                    if (bit_cnt < 4'd8)
+                        trivium_en <= 1'b1;
+
+                    // --- Feed: bit_cnt 0-7, LSB first ---
+                    if (bit_cnt < 4'd8) begin
+                        plain_bit <= pt_shift[0];
+                        pt_shift  <= {1'b0, pt_shift[7:1]};
+                    end
+                    else
+                        plain_bit <= 1'b0;
+
+                    // --- Capture: bit_cnt 2-8 (7 captures), right-shift ---
+                    // c0 enters at MSB, shifts right, c6 at bit[1]
+                    if (bit_cnt >= 4'd2 && bit_cnt <= 4'd8)
+                        ct_shift <= {cipher_bit, ct_shift[7:1]};
+
+                    bit_cnt <= bit_cnt + 1'b1;
+                end
+
+                SEND_CT: begin
+                    // 8th capture: c7 → bit[0]
+                    ct_shift  <= {cipher_bit, ct_shift[7:1]};
+                    tx_data_r <= {cipher_bit, ct_shift[7:1]};
+                    tx_init_r <= 1'b1;
+                    plain_bit <= 1'b0;
+                end
+
+                WAIT_TX: begin
+                    plain_bit <= 1'b0;
+                end
+            endcase
+        end
+    end
+endmodule
