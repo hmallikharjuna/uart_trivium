@@ -1,0 +1,28 @@
+`timescale 1ns / 1ps
+
+module piso #(
+    parameter data_width = 4
+)(
+    input                      clk,
+    input                      rst_n,
+    input                      mode,
+    input                      en,       // << NEW: shift enable
+    input   [data_width-1:0]   d_in,
+    input                      s_in,
+    output wire                d_out,
+    output wire [data_width-1:0] q
+);
+    reg [data_width-1:0] temp;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            temp <= {data_width{1'b0}};
+        else if (mode)
+            temp <= d_in;
+        else if (en)                        // << only shift when enabled
+            temp <= {temp[data_width-2:0], s_in};
+    end
+
+    assign d_out = temp[data_width-1];
+    assign q     = temp;
+endmodule
