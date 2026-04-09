@@ -1,0 +1,103 @@
+`timescale 1ns / 1ps
+
+module trivium_fsm (
+    input  wire         clk,
+    input  wire         rst_n,
+    input  wire [287:0] d_in,
+    input  wire         init,
+    input  wire         done,
+    input  wire [79:0]  iv_in,
+    input  wire         en,          // << NEW: shift enable from controller
+    output reg  [127:0] key,
+    output wire         valid,
+    output wire         zi_out
+);
+    localparam [1:0] IDLE   = 2'b00,
+                     LOAD   = 2'b01,
+                     WARMUP = 2'b10,
+                     GEN    = 2'b11;
+
+    reg [1:0] ps, ns;
+
+    wire        mode;
+    wire [92:0] regA;
+    wire [83:0] regB;
+    wire [110:0] regC;
+    wire        t1, t2, t3;
+    wire        zi;
+
+    reg  [10:0] count;
+    reg  [7:0]  gen_count;
+    reg         gen_done;
+
+    // enable: always on during WARMUP, gated by external en during GEN
+    wire shift_en = (ps == WARMUP) || ((ps == GEN) && en);
+
+    internal_registers registers (
+        .clk   (clk),
+        .rst_n (rst_n),
+        .mode  (mode),
+        .en    (shift_en),   // << pass through
+        .d_in  (d_in),
+        .fb_a  (t3),
+        .fb_b  (t1),
+        .fb_c  (t2),
+        .regA  (regA),
+        .regB  (regB),
+        .regC  (regC)
+    );
+
+    assign t1 = regA[65] ^ regA[92] ^ (regA[90] & regA[91]) ^ regB[77];
+    assign t2 = regB[68] ^ regB[83] ^ (regB[81] & regB[82]) ^ regC[86];
+    assign t3 = regC[65] ^ regC[110] ^ (regC[108] & regC[109]) ^ regA[68];
+    assign zi  = regA[65] ^ regA[92] ^ regB[68] ^ regB[83] ^ regC[65] ^ regC[110];
+
+    assign mode = (ps == LOAD);
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            ps        <= IDLE;
+            count     <= 11'd0;
+            gen_count <= 8'd0;
+            gen_done  <= 1'b0;
+        end
+        else begin
+            ps <= ns;
+            if (ps == WARMUP)
+                count <= count + 11'd1;
+            else
+                count <= 11'd0;
+
+            if (ps == GEN && !gen_done)
+                gen_count <= gen_count + 8'd1;
+            else if (ps != GEN) begin
+                gen_count <= 8'd0;
+                gen_done  <= 1'b0;
+            end
+
+            if (gen_count == 8'd127)
+                gen_done <= 1'b1;
+        end
+    end
+
+    always @(*) begin
+        ns = ps;
+        case (ps)
+            IDLE   : ns = init                ? LOAD   : IDLE;
+            LOAD   : ns = WARMUP;
+            WARMUP : ns = (count == 11'd1151) ? GEN    : WARMUP;
+            GEN    : ns = done                ? IDLE   : GEN;
+            default: ns = IDLE;
+        endcase
+    end
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            key <= 128'b0;
+        else if (ps == GEN && !gen_done)
+            key <= {zi, key[127:1]};
+    end
+
+    assign valid  = (ps == GEN);
+    assign zi_out = zi;
+endmodule
