@@ -1,0 +1,51 @@
+`timescale 1ns / 1ps
+
+module trivium_integrated (
+    input          clk,
+    input          plain_txt,
+    input          rst_n,
+    input  [79:0]  key_in,
+    input  [79:0]  iv_in,
+    input          init,
+    input          done,
+    input          en,
+    (* dont_touch = "true" *) output [127:0] key,
+    output         valid,
+    output reg     cipher_text,
+    output [79:0]  iv_out
+);
+    wire [287:0] d_in;
+
+    assign d_in[79:0]    = key_in;
+    assign d_in[92:80]   = 13'b0;
+    assign d_in[172:93]  = iv_in;
+    assign d_in[176:173] = 4'b0;
+    assign d_in[284:177] = 108'b0;
+    assign d_in[287:285] = 3'b111;
+
+    assign iv_out = iv_in;
+
+    wire zi;
+
+    trivium_fsm u_trivium (
+        .clk    (clk),
+        .rst_n  (rst_n),
+        .d_in   (d_in),
+        .init   (init),
+        .done   (done),
+        .iv_in  (iv_in),
+        .en     (en),
+        .key    (key),
+        .valid  (valid),
+        .zi_out (zi)
+    );
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            cipher_text <= 1'b0;
+        else if (!done & valid & en)
+            cipher_text <= plain_txt ^ zi;
+        // when en=0: cipher_text HOLDS its last value
+        // (no else clause - this is intentional)
+    end
+endmodule
