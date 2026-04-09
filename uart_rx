@@ -1,0 +1,127 @@
+`timescale 1ns / 1ps
+
+module uart_rx_fsm (
+    input        clk,
+    input        rst_n,
+    input        rx,
+    input  [2:0] baud_rate,     // baud selection (own counter now)
+    output reg [7:0] data_out,
+    output reg       rx_valid,
+    output reg       frm_err
+);
+
+    parameter IDLE  = 2'b00;
+    parameter START = 2'b01;
+    parameter DATA  = 2'b10;
+    parameter STOP  = 2'b11;
+
+    reg [1:0] ps, ns;
+    reg [2:0] bit_cnt;
+    reg [7:0] shift_reg;
+
+    //------------------------------------------------
+    // Local baud period lookup
+    //------------------------------------------------
+    reg [13:0] period;
+    always @(*) begin
+        case (baud_rate)
+            3'b000: period = 14'd10416;  // 9600
+            3'b001: period = 14'd5208;   // 19200
+            3'b010: period = 14'd2604;   // 38400
+            3'b011: period = 14'd1736;   // 57600
+            3'b100: period = 14'd868;    // 115200
+            3'b101: period = 14'd434;    // 230400
+            3'b110: period = 14'd108;    // 921600
+            default: period = 14'd868;   // 115200
+        endcase
+    end
+
+    //------------------------------------------------
+    // Local counter - resets on start bit detection
+    //------------------------------------------------
+    reg [13:0] rx_cnt;
+
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            rx_cnt <= 14'd0;
+        else if (ps == IDLE && !rx)         // start bit falling edge: sync
+            rx_cnt <= 14'd0;
+        else if (rx_cnt == period)
+            rx_cnt <= 14'd0;
+        else
+            rx_cnt <= rx_cnt + 1'b1;
+    end
+
+    wire baud_pulse = (rx_cnt == period);
+    wire half_baud  = (rx_cnt == (period >> 1));
+
+    //------------------------------------------------
+    // State Register
+    //------------------------------------------------
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            ps <= IDLE;
+        else
+            ps <= ns;
+    end
+
+    //------------------------------------------------
+    // Next State Logic
+    //------------------------------------------------
+    always @(*) begin
+        case (ps)
+            IDLE:  ns = (!rx)                           ? START : IDLE;
+            START: ns = (half_baud)                     ? DATA  : START;
+            DATA:  ns = (baud_pulse && bit_cnt == 3'd7) ? STOP  : DATA;
+            STOP:  ns = (baud_pulse)                    ? IDLE  : STOP;
+            default: ns = IDLE;
+        endcase
+    end
+
+    //------------------------------------------------
+    // Datapath
+    //------------------------------------------------
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n) begin
+            shift_reg <= 8'd0;
+            bit_cnt   <= 3'd0;
+            data_out  <= 8'd0;
+            rx_valid  <= 1'b0;
+            frm_err   <= 1'b0;
+        end
+        else begin
+            rx_valid <= 1'b0;
+            frm_err  <= 1'b0;
+
+            case (ps)
+                IDLE: begin
+                    bit_cnt <= 3'd0;
+                end
+
+                START: begin
+                    bit_cnt <= 3'd0;
+                end
+
+                DATA: begin
+                    if (baud_pulse) begin
+                        shift_reg <= {rx, shift_reg[7:1]};
+                        bit_cnt   <= bit_cnt + 1'b1;
+                    end
+                end
+
+                STOP: begin
+                    if (baud_pulse) begin
+                        if (rx) begin
+                            data_out <= shift_reg;
+                            rx_valid <= 1'b1;
+                        end
+                        else begin
+                            frm_err <= 1'b1;
+                        end
+                        bit_cnt <= 3'd0;
+                    end
+                end
+            endcase
+        end
+    end
+endmodule
