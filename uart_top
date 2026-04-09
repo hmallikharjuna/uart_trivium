@@ -1,0 +1,50 @@
+`timescale 1ns / 1ps
+
+module uart_top (
+    input        clk,
+    input        rst_n,
+    input        rx,
+    input  [2:0] baud_rate,
+    input  [7:0] tx_data,
+    input        tx_init,
+    output       tx,
+    output [7:0] rx_data,
+    output       rx_valid,
+    output       tx_busy,
+    output       frm_err
+);
+
+    wire baud_pulse;
+
+    // Baud generator - used by TX only now
+    baudrate_generator u_baud (
+        .clk       (clk),
+        .rst_n     (rst_n),
+        .baud_rate (baud_rate),
+        .baud_pulse(baud_pulse),
+        .half_baud ()               // RX no longer uses this
+    );
+
+    // RX - has its own local counter that syncs to start bit
+    uart_rx_fsm u_rx (
+        .clk       (clk),
+        .rst_n     (rst_n),
+        .rx        (rx),
+        .baud_rate (baud_rate),      // passes baud selection, not pulses
+        .data_out  (rx_data),
+        .rx_valid  (rx_valid),
+        .frm_err   (frm_err)
+    );
+
+    // TX - uses shared baud generator
+    uart_tx u_tx (
+        .clk       (clk),
+        .rst_n     (rst_n),
+        .baud_pulse(baud_pulse),
+        .data_in   (tx_data),
+        .init      (tx_init),
+        .tx        (tx),
+        .tx_busy   (tx_busy)
+    );
+
+endmodule
