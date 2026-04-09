@@ -1,0 +1,53 @@
+
+module baudrate_generator(
+    input        clk,
+    input        rst_n,
+    input  [2:0] baud_rate,
+    output reg   baud_pulse,
+    output reg   half_baud
+);
+
+    reg [13:0] counter;
+    reg [13:0] period;      // full bit period in clock cycles
+
+    //  Load period based on baud_rate selection
+    always @(*) begin
+        case(baud_rate)
+            3'b000: period = 14'd10416;  // 9600
+            3'b001: period = 14'd5208;   // 19200
+            3'b010: period = 14'd2604;   // 38400
+            3'b011: period = 14'd1736;   // 57600
+            3'b100: period = 14'd868;    // 115200
+            3'b101: period = 14'd434;    // 230400
+            3'b110: period = 14'd108;    // 921600
+            default: period = 14'd868;   // 115200 default
+        endcase
+    end
+
+    //  Counter - increments every clock, resets at full period
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            counter <= 14'd0;
+        else if (counter == period)
+            counter <= 14'd0;
+        else
+            counter <= counter + 1'b1;
+    end
+
+    //  baud_pulse - fires once per full bit period
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            baud_pulse <= 1'b0;
+        else
+            baud_pulse <= (counter == period) ? 1'b1 : 1'b0;
+    end
+
+    //  half_baud - fires at center of bit period
+    always @(posedge clk or negedge rst_n) begin
+        if (!rst_n)
+            half_baud <= 1'b0;
+        else
+            half_baud <= (counter == (period >> 1)) ? 1'b1 : 1'b0;
+    end
+
+endmodule
