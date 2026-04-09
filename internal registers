@@ -1,0 +1,48 @@
+`timescale 1ns / 1ps
+
+module internal_registers (
+    input           clk,
+    input           rst_n,
+    input           mode,
+    input           en,         // << NEW
+    input   [287:0] d_in,
+    input           fb_a,
+    input           fb_b,
+    input           fb_c,
+    output  [92:0]  regA,
+    output  [83:0]  regB,
+    output  [110:0] regC
+);
+    piso #(.data_width(93)) reg_a (
+        .clk   (clk),
+        .rst_n (rst_n),
+        .mode  (mode),
+        .en    (en),
+        .d_in  (d_in[92:0]),
+        .s_in  (fb_a),
+        .d_out (),
+        .q     (regA)
+    );
+
+    piso #(.data_width(84)) reg_b (
+        .clk   (clk),
+        .rst_n (rst_n),
+        .mode  (mode),
+        .en    (en),
+        .d_in  (d_in[176:93]),
+        .s_in  (fb_b),
+        .d_out (),
+        .q     (regB)
+    );
+
+    piso #(.data_width(111)) reg_c (
+        .clk   (clk),
+        .rst_n (rst_n),
+        .mode  (mode),
+        .en    (en),
+        .d_in  (d_in[287:177]),
+        .s_in  (fb_c),
+        .d_out (),
+        .q     (regC)
+    );
+endmodule
