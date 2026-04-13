@@ -1,0 +1,72 @@
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date: 13.04.2026 15:33:37
+// Design Name: 
+// Module Name: usb_trivium_reg
+// Project Name: 
+// Target Devices: 
+// Tool Versions: 
+// Description: 
+// 
+// Dependencies: 
+// 
+// Revision:
+// Revision 0.01 - File Created
+// Additional Comments:
+// 
+//////////////////////////////////////////////////////////////////////////////////
+
+module reg_trivium_usb (
+    input wire clk,
+    input wire rst,
+    input wire         reg_write,
+    input  wire        reg_read,
+    input  wire [13:0] reg_address,
+    input  wire [6:0]  reg_bytecnt,
+    input  wire [7:0]  reg_datao,
+    output reg  [7:0]  reg_datai,
+    output reg  [79:0] key,
+    output reg  [79:0] iv,
+    output reg         start,
+    input  wire [7:0]  ks_byte,
+    input  wire        ks_valid,
+    input  wire        done
+);
+
+always @(posedge clk) begin
+    if (rst) begin
+        key   <= 0;
+        iv    <= 0;
+        start <= 0;
+    end else if (reg_write) begin
+        case (reg_address)
+
+            14'h00: key[reg_bytecnt*8 +: 8] <= reg_datao;
+            14'h01: iv [reg_bytecnt*8 +: 8] <= reg_datao;
+
+            14'h02: start <= reg_datao[0];
+
+        endcase
+    end
+end
+
+always @(posedge clk) begin
+    if (rst)
+        reg_datai <= 8'h00;
+    else if (reg_read) begin
+        case (reg_address)
+
+            14'h03: reg_datai <= ks_byte;
+
+            14'h04: reg_datai <= {6'b0, done, ks_valid};
+
+            default: reg_datai <= 8'h00;
+
+        endcase
+    end
+end
+
+endmodule
