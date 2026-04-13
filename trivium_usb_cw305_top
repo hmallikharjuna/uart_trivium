@@ -1,0 +1,182 @@
+`timescale 1ns / 1ps
+//////////////////////////////////////////////////////////////////////////////////
+// Company: 
+// Engineer: 
+// 
+// Create Date: 13.04.2026 15:43:23
+// Design Name: 
+// Module Name: cw305_trivium_usb
+// Project Name: 
+// Target Devices: 
+// Tool Versions: 
+// Description: 
+// 
+// Dependencies: 
+// 
+// Revision:
+// Revision 0.01 - File Created
+// Additional Comments:
+// 
+//////////////////////////////////////////////////////////////////////////////////
+
+module cw305_trivium_top (
+
+    input  wire usb_clk,
+    input  wire rst,
+
+    // USB interface
+    input  wire [7:0]  usb_din,
+    output wire [7:0]  usb_dout,
+    output wire        usb_isout,
+    input  wire [20:0] usb_addr,
+    input  wire        usb_rdn,
+    input  wire        usb_wrn,
+    input  wire        usb_cen,
+
+    // external done (as you said)
+    input  wire        done_ext
+);
+
+///////////////////////////////////////////////////////////
+// FE signals
+///////////////////////////////////////////////////////////
+wire [13:0] reg_address;
+wire [6:0]  reg_bytecnt;
+wire [7:0]  reg_datao;
+wire [7:0]  reg_datai;
+wire reg_read, reg_write;
+
+///////////////////////////////////////////////////////////
+// USB FE
+///////////////////////////////////////////////////////////
+cw305_usb_reg_fe FE (
+    .usb_clk(usb_clk),
+    .rst(rst),
+
+    .usb_din(usb_din),
+    .usb_dout(usb_dout),
+    .usb_isout(usb_isout),
+    .usb_addr(usb_addr),
+    .usb_rdn(usb_rdn),
+    .usb_wrn(usb_wrn),
+    .usb_alen(1'b0),
+    .usb_cen(usb_cen),
+
+    .reg_address(reg_address),
+    .reg_bytecnt(reg_bytecnt),
+    .reg_datao(reg_datao),
+    .reg_datai(reg_datai),
+    .reg_read(reg_read),
+    .reg_write(reg_write),
+    .reg_addrvalid()
+);
+
+///////////////////////////////////////////////////////////
+// Internal signals
+///////////////////////////////////////////////////////////
+wire [79:0] key, iv;
+wire start;
+
+wire [7:0] ks_byte;
+wire ks_valid;
+
+///////////////////////////////////////////////////////////
+// Register block
+///////////////////////////////////////////////////////////
+reg_trivium_usb REG (
+    .clk(usb_clk),
+    .rst(rst),
+
+    .reg_write(reg_write),
+    .reg_read(reg_read),
+    .reg_address(reg_address),
+    .reg_bytecnt(reg_bytecnt),
+    .reg_datao(reg_datao),
+    .reg_datai(reg_datai),
+
+    .key(key),
+    .iv(iv),
+    .start(start),
+
+    .ks_byte(ks_byte),
+    .ks_valid(ks_valid),
+    .done(done_ext)   // use external done
+);
+
+///////////////////////////////////////////////////////////
+// Start pulse generation
+///////////////////////////////////////////////////////////
+reg start_d;
+
+always @(posedge usb_clk) begin
+    if (rst)
+        start_d <= 0;
+    else
+        start_d <= start;
+end
+
+wire start_pulse = start & ~start_d;
+
+///////////////////////////////////////////////////////////
+// Control signals
+///////////////////////////////////////////////////////////
+reg en;
+reg init;
+
+always @(posedge usb_clk) begin
+    if (rst) begin
+        en   <= 0;
+        init <= 0;
+    end else begin
+        init <= start_pulse;   // one-cycle pulse
+        en   <= (start | en) & ~done_ext;  
+    end
+end
+
+///////////////////////////////////////////////////////////
+// Trivium core signals
+///////////////////////////////////////////////////////////
+wire ks_bit;
+wire valid_bit;
+wire [127:0] key_unused;
+wire [79:0]  iv_out;
+
+///////////////////////////////////////////////////////////
+// Trivium core
+///////////////////////////////////////////////////////////
+trivium_integrated CORE (
+    .clk(usb_clk),
+    .plain_txt(1'b0),
+    .rst_n(~rst),
+    .key_in(key),
+    .iv_in(iv),
+    .init(init),
+    .done(done_ext),   // from hierarchy
+    .en(en),
+    .key(key_unused),
+    .valid(valid_bit),
+    .cipher_text(ks_bit),
+    .iv_out(iv_out)
+);
+
+///////////////////////////////////////////////////////////
+// Bit → Byte packing
+///////////////////////////////////////////////////////////
+reg [2:0] bit_cnt;
+reg [7:0] shift_reg;
+
+always @(posedge usb_clk) begin
+    if (rst || start_pulse) begin
+        bit_cnt   <= 0;
+        shift_reg <= 0;
+    end 
+    else if (valid_bit && en) begin
+        shift_reg <= {shift_reg[6:0], ks_bit};
+        bit_cnt   <= bit_cnt + 1;
+    end
+end
+
+assign ks_valid = (bit_cnt == 3'd7) && valid_bit;
+assign ks_byte  = {shift_reg[6:0], ks_bit};
+
+endmodule
